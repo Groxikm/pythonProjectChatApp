@@ -6,11 +6,12 @@ import datetime
 DATE_FORMAT = "%y/%m/%d %H:%M:%S"
 
 
-class RegistrationData(abstractions.data_access.data_entity.AbstractEntity, abstractions.data_transfer.Exchangeable):
+class MessagesData(abstractions.data_access.data_entity.AbstractEntity, abstractions.data_transfer.Exchangeable):
 
-    def __init__(self, id: str, user_id: str, location: str, status: str, role: str, date: datetime.datetime) -> None:
+    def __init__(self, id: str, user_id: str, room_id: str, location: str, status: str, role: str, date: datetime.datetime) -> None:
         self.id = id
         self.user_id = user_id
+        self.room_id = room_id
         self.location = location
         self.status = status
         self.role = role
@@ -19,10 +20,10 @@ class RegistrationData(abstractions.data_access.data_entity.AbstractEntity, abst
     def from_web_dto(dto: dict):
         if dto.keys().__contains__("id") == True:
             if (dto.get("id") != None) or (dto.get("id") != ""):
-                return RegistrationData(dto.get("id"), dto.get("user_id"), dto.get("location"), dto.get("status"), dto.get("role"),
+                return MessagesData(dto.get("id"), dto.get("user_id"), dto.get("room_id"), dto.get("location"), dto.get("status"), dto.get("role"),
                                  datetime.datetime.strptime(dto.get("date"), DATE_FORMAT))
 
-        return RegistrationData(uuid.uuid1(), dto.get("user_id"), dto.get("location"), dto.get("status"), dto.get("role"), datetime.datetime.now())
+        return MessagesData(uuid.uuid1(), dto.get("user_id"), dto.get("location"), dto.get("status"), dto.get("role"), datetime.datetime.now())
 
     def get_id_str(self) -> str:
         return str(self.id)
@@ -31,6 +32,7 @@ class RegistrationData(abstractions.data_access.data_entity.AbstractEntity, abst
         return {
             "id": self.get_id_str(),
             "user_id": self.user_id,
+            "room_id": self.room_id,
             "location": self.location,
             "status": self.status,
             "role": self.role,
@@ -41,6 +43,7 @@ class RegistrationData(abstractions.data_access.data_entity.AbstractEntity, abst
         return {
             "_id": self.get_id_str(),
             "user_id": self.user_id,
+            "room_id": self.room_id,
             "location": self.location,
             "status": self.status,
             "role": self.role,
@@ -48,6 +51,6 @@ class RegistrationData(abstractions.data_access.data_entity.AbstractEntity, abst
         }
 
 
-def from_db_dto(dto: dict) -> RegistrationData:
-    return RegistrationData(dto.get("_id"), dto.get("user_id"), dto.get("location"),  dto.get("status"), dto.get("role"),
+def from_db_dto(dto: dict) -> MessagesData:
+    return MessagesData(dto.get("_id"), dto.get("user_id"), dto.get("room_id"), dto.get("location"),  dto.get("status"), dto.get("role"),
                             datetime.datetime.strptime(dto.get("date"), DATE_FORMAT))

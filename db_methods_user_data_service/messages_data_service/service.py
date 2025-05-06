@@ -1,27 +1,27 @@
 from abc import abstractmethod, ABC
-import db_methods_user_data_service.registration_data_service.registration_data as registrationData
+import db_methods_user_data_service.messages_data_service.messages_data as messagesData
 from abstractions.data_access import repository
 import pymongo
-from db_methods_user_data_service.registration_data_service.registration_data import from_db_dto
+from db_methods_user_data_service.messages_data_service.messages_data import from_db_dto
 
 import datetime
 
 DATE_FORMAT = "%y/%m/%d %H:%M:%S"
 
 
-class RegistrationDataService:
+class MessagesDataService:
     def __init__(self, repo: repository.Repository) -> None:
         self._repo = repo
         self.collection = self._repo.collection
 
-    def add_new(self, registrationData_dto: dict) -> registrationData.RegistrationData:
-        return registrationData.from_db_dto(self._repo.create(registrationData.RegistrationData.from_web_dto(registrationData_dto)))
+    def add_new(self, messagesData_dto: dict) -> messagesData.MessagesData:
+        return messagesData.from_db_dto(self._repo.create(messagesData.MessagesData.from_web_dto(messagesData_dto)))
 
     def delete(self, id: str) -> None:
         self._repo.delete_by_id(id)
 
-    def find_by_id(self, id: str) -> registrationData.RegistrationData:
-        return registrationData.from_db_dto(self._repo.find_by_id(id))
+    def find_by_id(self, id: str) -> messagesData.MessagesData:
+        return messagesData.from_db_dto(self._repo.find_by_id(id))
 
     def find_all_by_id(self, start_from, page_size: int, user_id: str) -> list:
         page_collection = list()
@@ -43,9 +43,10 @@ class RegistrationDataService:
 
         return page_collection
 
-    def find_all_by_page(self, start_from, page_size: int) -> list:
+    # this is a pagination method which uses start_from as a value for filtering
+    def find_all_by_page(self, start_from, page_size: int = 10) -> list:
         page_collection = list()
-        query = {"role": "USER"}
+        query = {}
         if start_from:
             query["date"] = {"$lt": start_from}
 

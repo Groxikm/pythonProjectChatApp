@@ -40,7 +40,7 @@ class UserDataService:
     def find_all_by_page(self, start_from=None, page_size: int =10) -> list:
         page_collection = []
 
-        query = {"role": "USER"}
+        query = {}
         if start_from:
             query["date"] = {"$lt": start_from}
 
