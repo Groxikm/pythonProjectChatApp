@@ -25,7 +25,7 @@ class MessagesDataService:
 
     def find_all_by_id(self, start_from, page_size: int, user_id: str) -> list:
         page_collection = list()
-        print(type(start_from), page_size)
+        # print(type(start_from), page_size)
         query = {"user_id": user_id}
         if start_from:
             query["date"] = {"$lt": start_from}
@@ -62,3 +62,31 @@ class MessagesDataService:
             print(f"Error while fetching data: {e}")
 
         return page_collection
+
+
+    def find_by_room_id(self, start_from, page_size: int, room_id: str) -> list:
+        """Find messages by room ID with pagination support"""
+        page_collection = list()
+        query = {"room_id": room_id}
+        if start_from:
+            query["date"] = {"$lt": start_from}
+
+        try:
+            cursor = self.collection.find(query).sort([("date", pymongo.DESCENDING)]).limit(page_size)
+
+            for doc in cursor:
+                page_collection.append(from_db_dto(doc))
+                if len(page_collection) >= page_size:
+                    break  # Stop when enough elements are collected
+        except Exception as e:
+            print(f"Error while fetching messages by room_id: {e}")
+
+        return page_collection
+
+
+
+
+
+
+
+

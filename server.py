@@ -1,287 +1,269 @@
+from flask import Flask, request, jsonify
+from flask_socketio import SocketIO, emit, join_room, leave_room
 from flask_cors import CORS
-from mongo_orm import mongo_db
-from flask import Flask, request
-
+from mongo_orm.base_repository import BaseRepository
+from db_methods_user_data_service.user_service import UserService
+from db_methods_user_data_service.message_service import MessageService
+from db_methods_user_data_service.group_service import GroupService
 from authorization.security import TokenServiceImpl, EndpointsSecurityService
-
-from db_methods_user_data_service import service as service_user_data
-from db_methods_user_data_service.messages_data_service import service as service_mes_data
-from db_methods_user_data_service.groups_data_service import service as service_groups_data
 import settings
+import datetime
+
 app = Flask(__name__)
 CORS(app)
+socketio = SocketIO(app, cors_allowed_origins="*")
 
-# token service uses jwt token lib to manipulate tokens
+# Initialize services
 token_service = TokenServiceImpl()
-# security service addresses token service to represent information from tokens
 security_service = EndpointsSecurityService()
 
-# data service are to provide convenient data representaion for the DB and python
-# as well as implies security measures for example by not returning password
-user_data_service = service_user_data.UserDataService(
-        mongo_db.MongoRepository(settings.DB_CONNECTION_STRING, settings.DB_NAME, "user_data_collection"))
-"""
-            "id": self.get_id_str(),
-            "globalRole": self.get_global_role(),
-            "username": self.username,
-            "email": self.email,
-            "profilePicture": self.profilePicture,
-            "password": self.password,
-            "status": self.status,
-            "friends": self.friends, # list []
-            "lastActive": self.lastActive.strftime(DATE_FORMAT), # date format YYYY-MM-DD
-            "date": self.date.strftime(DATE_FORMAT) # date format YYYY-MM-DD
-"""
-user_group_service = service_groups_data.GroupsDataService(
-    mongo_db.MongoRepository(settings.DB_CONNECTION_STRING, settings.DB_NAME, "user_rooms_attempts"))
-"""
-            self.id = id
-            self.creator_id = creator_id
-            self.participants = participants
-            self.password = password
-            self.admins = admins
-"""
+# Initialize repositories and services
+user_repo = BaseRepository(settings.DB_CONNECTION_STRING, settings.DB_NAME, "users")
+group_repo = BaseRepository(settings.DB_CONNECTION_STRING, settings.DB_NAME, "groups")
+message_repo = BaseRepository(settings.DB_CONNECTION_STRING, settings.DB_NAME, "messages")
 
-user_message_service = service_mes_data.MessagesDataService(
-    mongo_db.MongoRepository(settings.DB_CONNECTION_STRING, settings.DB_NAME, "messages_collection"))
-"""
-        self.id = id
-        self.user_id = user_id
-        self.room_id = room_id
-        self.location = location
-        self.status = status
-        self.role = role
-        self.date = date
+user_service = UserService(user_repo)
+group_service = GroupService(group_repo)
+message_service = MessageService(message_repo)
 
-"""
+# Helper functions
+def get_current_user(access_token):
+    if not access_token or not token_service.verify(access_token):
+        return None
+    token_data = security_service.provide_encoded(access_token)
+    return user_service.find_by_id(token_data['id'])
 
+def require_auth(f):
+    def decorated(*args, **kwargs):
+        access_token = request.headers.get('accessToken')
+        user = get_current_user(access_token)
+        if not user:
+            return jsonify({"message": "Authentication required"}), 401
+        return f(user, *args, **kwargs)
+    decorated.__name__ = f.__name__
+    return decorated
 
-@app.route('/login', methods=['POST'])
+# Authentication routes
+@app.route('/api/login', methods=['POST'])
 def login():
-    # first action is to process login via token
-    isTokenValid = False
-    try:
-        received_token = request.headers.get('accessToken')
-        isTokenValid = token_service.verify(received_token)
-        if isTokenValid:
-            token_data = security_service.provide_encoded(received_token)
-            user_data = user_data_service.find_by_id(token_data['id'])
-            if token_service.verify_admin(received_token):
-                user_info = {
-                    "id": user_data.id,
-                    "global_role": user_data.global_role,
-                    "username": user_data.username,
-                    "password": user_data.password,
-                    "profile_pic": user_data.profile_pic,
-                    "status": user_data.status,
-                    "friends" : user_data.friends,
-                    "last_active_date" : user_data.last_active_date,
-                    "date" : user_data.date
-                }
-                return user_info, 200
-    except Exception as e:
-        isTokenValid = False
-
-    # second action process login in ordinary way
-    # login logic when the received token didn't pass
     data = request.get_json()
-    if not data or 'login' not in data or 'password' not in data:
-        return {"message": "Invalid input"}, 400
+    if not data or 'username' not in data or 'password' not in data:
+        return jsonify({"message": "Invalid input"}), 400
 
-    login_user = data['login']
-    password = data['password']
-    try:
-        user_data = user_data_service.find_by_login(login_user)
-        if user_data and user_data.password == password:
-            try:
-                token_login = token_service.encode(user_data.role, user_data.id)
-            except Exception as e:
-                return {"message": str(e)}, 400
+    user = user_service.find_by_username(data['username'])
+    if not user or user.get('password') != data['password']:
+        return jsonify({"message": "Invalid credentials"}), 401
 
-            # Return user_info as allowed fragment of user_data
-            user_info = {
-                "id": user_data.id,
-                "global_role": user_data.global_role,
-                "username": user_data.username,
-                "password": user_data.password,
-                "profile_pic": user_data.profile_pic,
-                "status": user_data.status,
-                "friends": user_data.friends,
-                "last_active_date": user_data.last_active_date,
-                "date": user_data.date
-            }
-            return user_info, 200
-        elif not user_data:
-            return {"message": "User not found"}, 404
-        else:
-            return {"message": "Invalid password"}, 401
+    token = token_service.encode(user['id'])
+    user_service.update_status(user['id'], "online")
+    
+    return jsonify({
+        **user,
+        "token": token
+    }), 200
 
-    except Exception as e:
-        return {"message": "An error occurred during login", "error": str(e)}, 400
-
-
-@app.route('/api/add-user', methods=['POST'])
-def add_user():
-    # security check via token
-    verification_result = security_service.secure_user(request.headers.get('accessToken'))
-    if verification_result is not None:
-        return {"message": "Invalid token!"}, 401
-
+@app.route('/api/register', methods=['POST'])
+def register():
     data = request.get_json()
-    try:
-        # expected from request fields are addressing to the received data
-        user_create_dto = {
-            "username": data.username,
-            "profile_pic": data.profile_pic,
-            "status": None,
-            "friends": []  # list []
-        }
-        try:
-            user_data_service.find_by_login(user_create_dto['username'])
-        except Exception as e:
-            created_user = user_data_service.add_new(user_create_dto)
-            return created_user.to_web_dto(), 201
+    if not data or 'username' not in data or 'password' not in data:
+        return jsonify({"message": "Invalid input"}), 400
 
-        return {"error": "User not created. Provided name and surname already exists"}, 400
-    except Exception as e:
-        return {"error": str(e)}, 400
+    if user_service.find_by_username(data['username']):
+        return jsonify({"message": "Username already exists"}), 409
 
+    user = user_service.create_user(
+        data['username'],
+        data['password'],
+        data.get('profile_pic', '')
+    )
+    token = token_service.encode(user['id'])
+    
+    return jsonify({
+        **user,
+        "token": token
+    }), 201
 
-@app.route('/api/user-reg-attempt', methods=['POST'])
-def add_group():
-    # security check via token
-    verification_result = security_service.secure_user(request.headers.get('accessToken'))
-    if verification_result is not None:
-        return {"message": "Invalid token!"}, 401
+# User routes
+@app.route('/api/users/me', methods=['GET'])
+@require_auth
+def get_current_user_route(user):
+    return jsonify(user), 200
 
+@app.route('/api/users/me', methods=['PUT'])
+@require_auth
+def update_user_profile(user):
     data = request.get_json()
-    try:
-        # expected from request fields are addressing to the received data
-        group_create_dto = {
-            "username": data.username,
-            "profile_pic": data.profile_pic,
-            "status": None,
-            "friends": []  # list []
-        }
-        try:
-            user_data_service.find_by_login(group_create_dto['username'])
-        except Exception as e:
-            created_user = user_data_service.add_new(group_create_dto)
-            return created_user.to_web_dto(), 201
+    if not data:
+        return jsonify({"message": "Invalid input"}), 400
 
-        return {"error": "User not created. Provided name and surname already exists"}, 400
-    except Exception as e:
-        return {"error": str(e)}, 400
+    success = user_service.update_user(user['id'], data)
+    if not success:
+        return jsonify({"message": "Failed to update profile"}), 400
 
+    updated_user = user_service.find_by_id(user['id'])
+    return jsonify(updated_user), 200
 
-@app.route('/api/find-user-by-id', methods=['GET'])
-def find_user_by_id():
-    # security check via token
-    verification_result = security_service.secure_admin(request.headers.get('accessToken'))
-    if verification_result is not None:
-        return {"message": "Invalid token!"}, 401
+# Group routes
+@app.route('/api/groups', methods=['POST'])
+@require_auth
+def create_group(user):
+    data = request.get_json()
+    if not data or 'name' not in data:
+        return jsonify({"message": "Group name is required"}), 400
 
-    user_id = request.args.get('id')
-    try:
-        user_data = user_data_service.find_by_id(user_id).to_web_dto()
-        user_data['attendance'] = security_service.frequency_calc(user_data['visit_frequency'])
-        return user_data, 200
-    except Exception as e:
-        return {"error": str(e)}, 400
+    group = group_service.create_group(
+        data['name'],
+        user['id'],
+        data.get('is_private', False),
+        data.get('password', '')
+    )
+    return jsonify(group), 201
 
+@app.route('/api/groups', methods=['GET'])
+@require_auth
+def get_user_groups(user):
+    groups = group_service.get_user_groups(user['id'])
+    return jsonify(groups), 200
 
-# User change endpoints
-@app.route('/api/change-user-data', methods=['PUT'])
-def change_user_data():
-    # security check via token
-    verification_result = security_service.secure_admin(request.headers.get('accessToken'))
-    if verification_result is not None:
-        return {"message": "Invalid token!"}, 401
+@app.route('/api/groups/<group_id>', methods=['GET'])
+@require_auth
+def get_group(user, group_id):
+    if not group_service.is_member(group_id, user['id']):
+        return jsonify({"message": "Not a member of this group"}), 403
+
+    group = group_service.get_group(group_id)
+    if not group:
+        return jsonify({"message": "Group not found"}), 404
+
+    return jsonify(group), 200
+
+@app.route('/api/groups/<group_id>/members', methods=['POST'])
+@require_auth
+def add_group_member(user, group_id):
+    if not group_service.is_admin(group_id, user['id']):
+        return jsonify({"message": "Not authorized"}), 403
 
     data = request.get_json()
-    user_id = data['id']
-    message = {}
-    try:
-        updated_user_data = user_data_service.find_by_id(user_id)
-        password = updated_user_data.password
+    if not data or 'user_id' not in data:
+        return jsonify({"message": "User ID is required"}), 400
 
+    success = group_service.add_member(group_id, data['user_id'])
+    if not success:
+        return jsonify({"message": "Failed to add member"}), 400
+
+    return jsonify({"message": "Member added successfully"}), 200
+
+@app.route('/api/groups/<group_id>/members/<member_id>', methods=['DELETE'])
+@require_auth
+def remove_group_member(user, group_id, member_id):
+    if not group_service.is_admin(group_id, user['id']):
+        return jsonify({"message": "Not authorized"}), 403
+
+    success = group_service.remove_member(group_id, member_id)
+    if not success:
+        return jsonify({"message": "Failed to remove member"}), 400
+
+    return jsonify({"message": "Member removed successfully"}), 200
+
+# Message routes
+@app.route('/api/groups/<group_id>/messages', methods=['GET'])
+@require_auth
+def get_group_messages(user, group_id):
+    if not group_service.is_member(group_id, user['id']):
+        return jsonify({"message": "Not a member of this group"}), 403
+
+    before = request.args.get('before')
+    if before:
         try:
-            updated_user_data.username = data['username']
-        except Exception as e:
-            message["errorUserName"] = str(e)
+            before = datetime.datetime.fromisoformat(before)
+        except:
+            return jsonify({"message": "Invalid date format"}), 400
 
-        try :
-            updated_user_data.surname = data['surname']
-        except Exception as e:
-            message["errorSurname"] = str(e)
+    messages = message_service.get_group_messages(
+        group_id,
+        limit=int(request.args.get('limit', 50)),
+        before=before
+    )
+    return jsonify(messages), 200
 
-        try:
-            updated_user_data.avatar_link = data['avatar_link']
-        except Exception as e:
-            message["errorAvatar"] = str(e)
+@app.route('/api/groups/<group_id>/messages', methods=['POST'])
+@require_auth
+def send_message(user, group_id):
+    if not group_service.is_member(group_id, user['id']):
+        return jsonify({"message": "Not a member of this group"}), 403
 
-        try:
-            updated_user_data.visit_frequency = data['visit_frequency']
-        except Exception as e:
-            message["errorVF"] = str(e)
+    data = request.get_json()
+    if not data or 'content' not in data:
+        return jsonify({"message": "Message content is required"}), 400
 
-        try:
-            updated_user_data.backlog = data['backlog']
-        except Exception as e:
-            message["errorBL"] = str(e)
+    message = message_service.create_message(
+        user['id'],
+        group_id,
+        data['content'],
+        data.get('type', 'text')
+    )
+    
+    # Emit the message to all group members
+    socketio.emit('new_message', message, room=group_id)
+    
+    return jsonify(message), 201
 
-        user_data_dto_with_password = updated_user_data.to_web_dto()
-        user_data_dto_with_password['password'] = password
+# WebSocket events
+@socketio.on('connect')
+def handle_connect():
+    access_token = request.args.get('token')
+    user = get_current_user(access_token)
+    if not user:
+        return False
+    
+    user_service.update_status(user['id'], "online")
+    emit('status_change', {'user_id': user['id'], 'status': 'online'}, broadcast=True)
 
-        user_data_service.update(user_data_dto_with_password)
-        return {"message": "User data changed!", "changeReport": message}, 200
-    except Exception as e:
-        return {"error": str(e)}, 400
+@socketio.on('disconnect')
+def handle_disconnect():
+    access_token = request.args.get('token')
+    user = get_current_user(access_token)
+    if user:
+        user_service.update_status(user['id'], "offline")
+        emit('status_change', {'user_id': user['id'], 'status': 'offline'}, broadcast=True)
 
+@socketio.on('join_group')
+def handle_join_group(data):
+    access_token = request.args.get('token')
+    user = get_current_user(access_token)
+    if not user:
+        return
+    
+    group_id = data.get('group_id')
+    if group_service.is_member(group_id, user['id']):
+        join_room(group_id)
+        emit('user_joined', {'user_id': user['id']}, room=group_id)
 
-@app.route('/api/delete-user-by-id', methods=['PUT'])
-def delete_user_by_id():
-    # security check via token
-    verification_result = security_service.secure_admin(request.headers.get('accessToken'))
-    if verification_result is not None:
-        return {"message": "Invalid token!"}, 401
+@socketio.on('leave_group')
+def handle_leave_group(data):
+    access_token = request.args.get('token')
+    user = get_current_user(access_token)
+    if not user:
+        return
+    
+    group_id = data.get('group_id')
+    if group_service.is_member(group_id, user['id']):
+        leave_room(group_id)
+        emit('user_left', {'user_id': user['id']}, room=group_id)
 
-    user_id = request.args.get('id')
-    user_data = user_data_service.find_by_id(user_id)
-    if user_data.role == "ADMIN":
-        return {"error": "User can't be deleted"}, 400
-    try:
-        user_data_service.delete(user_id)
-        return {"message": "User deleted!", "id": user_id}, 200
-    except Exception as e:
-        return {"error": str(e)}, 400
-
-
-@app.route('/api/get-users', methods=['GET'])
-def get_users():
-    # security check via token
-    verification_result = security_service.secure_admin(request.headers.get('accessToken'))
-    if verification_result is not None:
-        return {"message": "Invalid token!"}, 401
-
-    last_date = request.args.get('last_date')
-    limit = int(request.args.get('limit'))
-    last_users_dtos = []
-    try:
-
-        last_users = user_data_service.find_all_by_page(last_date, limit)
-
-        for user in last_users:
-            last_users_dtos.append(user.to_web_dto())
-
-        last_users_dto = {
-            "last_date": last_users_dtos[-1]["date"],
-            "users": last_users_dtos,
-        }
-        return last_users_dto, 200
-    except Exception as e:
-        return {"error": "No more logs exist", "server": str(e)}, 204
-
+@socketio.on('typing')
+def handle_typing(data):
+    access_token = request.args.get('token')
+    user = get_current_user(access_token)
+    if not user:
+        return
+    
+    group_id = data.get('group_id')
+    if group_service.is_member(group_id, user['id']):
+        emit('user_typing', {
+            'user_id': user['id'],
+            'username': user['username']
+        }, room=group_id)
 
 if __name__ == '__main__':
-    app.run()
+    socketio.run(app, debug=True)

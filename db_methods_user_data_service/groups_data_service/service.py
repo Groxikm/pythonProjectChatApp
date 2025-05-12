@@ -23,3 +23,29 @@ class GroupsDataService:
 
     def find_by_id(self, id: str) -> groupsData.GroupsData:
         return groupsData.from_db_dto(self._repo.find_by_id(id))
+
+    def update_group(self, group_dto: dict):
+        """Update group data in the database"""
+        try:
+            self.collection.update_one(
+                {"_id": group_dto["_id"]},
+                {"$set": group_dto}
+            )
+            return True
+        except Exception as e:
+            raise Exception(f"Error updating group: {e}")
+
+    def find_by_participant(self, user_id: str) -> list:
+        """Find all groups where the user_id is a participant"""
+        group_collection = list()
+        query = {"participants": user_id}
+
+        try:
+            cursor = self.collection.find(query)
+
+            for doc in cursor:
+                group_collection.append(from_db_dto(doc))
+        except Exception as e:
+            print(f"Error while fetching groups by participant: {e}")
+
+        return group_collection

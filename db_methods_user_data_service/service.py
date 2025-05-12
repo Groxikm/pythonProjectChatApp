@@ -14,6 +14,7 @@ class UserDataService:
         self.collection = self._repo.collection
 
     def add_new(self, userData_dto: dict) -> userData.UserData:
+        # print(userData_dto)
         return userData.from_db_dto(self._repo.create(userData.UserData.from_web_dto(userData_dto)))
 
     def update(self, userData_dto: dict) -> userData.UserData:
